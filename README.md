@@ -73,7 +73,7 @@ Run `python rename_papers.py --help` for all options.
 
 ## Ready-made builds
 
-Pre-built programs (no Python needed) are in the [`build`](build) folder. OCR still needs Tesseract
+Pre-built programs (no Python needed) will in the future be located within in the [`build`](build) folder. OCR still needs Tesseract
 installed separately.
 
 To build the Windows program yourself:
