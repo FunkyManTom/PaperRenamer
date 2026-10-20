@@ -73,13 +73,13 @@ Run `python rename_papers.py --help` for all options.
 
 ## Ready-made builds
 
-Pre-built programs (no Python needed) will in the future be located within in the [`build`](build) folder. OCR still needs Tesseract
+Pre-built programs (no Python needed) will in the future be made available until then the program needs to either be run through Python or build from source. OCR still needs Tesseract
 installed separately.
 
 To build the Windows program yourself:
 
 ```
-pip install pyinstaller -r requirements.txt
+python -m pip install pyinstaller -r requirements.txt
 pyinstaller --onefile --windowed --name "Paper Renamer" ^
     --exclude-module pymupdf.layout --exclude-module pymupdf4llm ^
     --exclude-module onnxruntime --exclude-module networkx --exclude-module numpy ^
