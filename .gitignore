@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.spec
+dist/
+# PyInstaller's working folders (the build/ folder itself holds the released programs)
+build/Paper Renamer/
+build/rename_papers/

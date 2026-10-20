@@ -1,0 +1,4 @@
+requests>=2.25
+pymupdf>=1.24
+# Only needed for the window (paper_renamer_gui.py), not for the command line.
+PySide6>=6.5
