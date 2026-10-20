@@ -3,6 +3,8 @@
 Renames PDFs of academic papers to something readable, e.g. `randomname.pdf` → `Fermi1926.pdf`.
 It identifies each paper online, so names come from the real publication record rather than guesses.
 
+<img width="1693" height="1100" alt="Screenshot 2026-10-20 180353" src="https://github.com/user-attachments/assets/b7e75a2e-09df-4315-bdf6-5ff332eb59d1" />
+
 ## How it identifies a paper
 
 For each PDF, in this order:
@@ -97,3 +99,5 @@ the program smaller. The result is `dist/Paper Renamer.exe`.
 - Most papers published after about 2000 are identified via their DOI. Older scans, preprints and
   theses are harder to identify. Matches from title or text searches are marked **Check** in the
   window, so look at those before renaming.
+- This project was created with assistance of AI. Whilst I have read through the code and tested everything
+  to the best of my ability, I can't guarantee that everything works as intended.
