@@ -5,3 +5,12 @@ dist/
 # PyInstaller's working folders (the build/ folder itself holds the released programs)
 build/Paper Renamer/
 build/rename_papers/
+# The user's own test PDFs (published books among them)
+test_pdf/
+# The regression test's links to / restored copies of those PDFs
+tests/.pdfs/
+# Kept local: the regression test's data (names of personal test PDFs, recorded queries)
+tests/expected.json
+tests/responses.json
+# Kept local: developer notes
+CLAUDE.md
