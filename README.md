@@ -3,7 +3,7 @@
 Renames PDFs of academic papers to something readable, e.g. `randomname.pdf` → `Fermi1926.pdf`.
 It identifies each paper online, so names come from the real publication record rather than guesses.
 
-<img width="1693" height="1100" alt="Screenshot 2026-10-20 180353" src="https://github.com/user-attachments/assets/b7e75a2e-09df-4315-bdf6-5ff332eb59d1" />
+<img width="2438" height="1853" alt="Screenshot_20261021_182241" src="https://github.com/user-attachments/assets/6c77dc38-4965-4e4b-95c4-48d3ea31d520" />
 
 ## How it identifies a paper
 
