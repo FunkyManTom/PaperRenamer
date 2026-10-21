@@ -83,7 +83,7 @@ For OCR of scanned papers, also install [Tesseract](https://github.com/tesseract
 
 - Windows: the [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki). The default install
   location is found automatically.
-- macOS: `brew install tesseract`
+- macOS (untested): `brew install tesseract`
 - Debian/Ubuntu: `sudo apt install tesseract-ocr`
 
 Without Tesseract everything else still works; scanned PDFs are just skipped.
