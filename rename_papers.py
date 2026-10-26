@@ -28,6 +28,7 @@ Dry run by default; pass --apply to actually rename.
     python rename_papers.py ~/papers --apply                  # rename
     python rename_papers.py ~/papers -r --pattern "{author}_{year}_{title}"
     python rename_papers.py ~/papers --apply --write-metadata --bib library.bib
+    python rename_papers.py ~/papers --apply --copy-to ~/library   # originals stay as they are
 
 Naming pattern placeholders:
     {author}   first author's surname          Fermi
@@ -1852,6 +1853,14 @@ def watch_folder(args, cache):
     return 0
 
 
+def shown(path, folder):
+    """A path relative to the scanned folder, or in full if it's elsewhere (moved or copied)."""
+    try:
+        return path.relative_to(folder)
+    except ValueError:
+        return path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("folder", type=Path)
@@ -1866,6 +1875,13 @@ def main():
     ap.add_argument("--no-cache", action="store_true", help="ignore and don't update the result cache")
     ap.add_argument("--write-metadata", action="store_true",
                     help="with --apply: also store title, authors, DOI and tags inside each renamed PDF")
+    where = ap.add_mutually_exclusive_group()
+    where.add_argument("--move-to", type=Path, metavar="DIR",
+                       help="move the PDFs into DIR and rename them there, instead of renaming them in place "
+                            "(subfolders are kept; already named PDFs are moved too)")
+    where.add_argument("--copy-to", type=Path, metavar="DIR",
+                       help="copy the PDFs into DIR under their new names, leaving the originals unchanged "
+                            "(subfolders are kept; already named PDFs are copied too)")
     ap.add_argument("--bib", type=Path, metavar="FILE", help="export BibTeX for all identified papers")
     ap.add_argument("--ris", type=Path, metavar="FILE", help="export RIS for all identified papers")
     watch = ap.add_argument_group("watching a folder")
@@ -1877,6 +1893,13 @@ def main():
     args = ap.parse_args()
     if args.watch and not args.output:
         ap.error("--watch needs --output DIR")
+    dest = args.move_to or args.copy_to
+    mode = "move" if args.move_to else "copy" if args.copy_to else "rename"
+    if dest and args.watch:
+        ap.error(f"--{mode}-to can't be used with --watch (use --output DIR)")
+    if dest and path_key(dest.resolve()) == path_key(args.folder.resolve()):
+        ap.error(f"--{mode}-to: the PDFs are already in {dest}; choose another folder, or leave it out to rename them "
+                 "in place")
     try:
         check_pattern(args.pattern)
     except ValueError as e:
@@ -1893,6 +1916,7 @@ def main():
     pdfs = list_pdfs(args.folder, args.recursive)
     renamed = failed = from_cache = 0
     seen = []  # (path after this run, plan) for the duplicate report and exports
+    taken = set()  # path_key()s of the names given out in the destination folder
     try:
         for plan in plan_renames(pdfs, use_ocr=not args.no_ocr, pattern=args.pattern, cache=cache,
                                  deep_ocr=args.deep_ocr):
@@ -1902,20 +1926,32 @@ def main():
             if plan.status == "skip":
                 print(f"  SKIP  {name}  ({plan.detail})")
                 failed += 1
-            elif plan.status == "ok":
+            elif plan.status == "ok" and not dest:
                 print(f"    OK  {name}  (already named)")
             else:
+                target = plan.target  # (for an already named PDF, the PDF itself)
+                if dest:  # the same subfolder of the destination, with a name not taken there
+                    target = dest / name.parent / plan.target.name
+                    if path_key(target) in taken or target.exists():
+                        target = unique_target(target.parent, target.stem, taken)
+                    taken.add(path_key(target))
                 how = plan.detail if plan.doi.lower() in plan.detail.lower() else f"{plan.detail}, doi {plan.doi}"
-                print(f"{'RENAME' if args.apply else ' WOULD'}  {name}  ->  {plan.target.name}  [{how}]")
+                print(f"{mode.upper().rjust(6) if args.apply else ' WOULD'}  {name}  ->  "
+                      f"{target if dest else target.name}  [{how}]")
                 if args.apply:
                     try:
-                        plan.pdf.rename(plan.target)
+                        if dest:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            # (shutil.move also works across drives, by copying and deleting the original)
+                            (shutil.copy2 if mode == "copy" else shutil.move)(str(plan.pdf), str(target))
+                        else:
+                            plan.pdf.rename(target)
                     except OSError as e:
-                        print(f"        (couldn't rename it: {e.strerror or e})")
+                        print(f"        (couldn't {mode} it: {e.strerror or e})")
                         failed += 1
                         seen.append((final, plan))
                         continue
-                    final = plan.target
+                    final = target
                     if args.write_metadata:
                         try:
                             write_metadata(final, plan.meta)
@@ -1934,7 +1970,7 @@ def main():
         print("\nPossible duplicates (same paper or identical files):")
         for g in groups:
             doi = next((seen[i][1].doi for i in g if seen[i][1].doi), "")
-            names = ", ".join(str(seen[i][0].relative_to(args.folder)) for i in g)
+            names = ", ".join(str(shown(seen[i][0], args.folder)) for i in g)
             print(f"  {names}" + (f"  [doi {doi}]" if doi else "  [identical]"))
 
     for fmt, out in (("bibtex", args.bib), ("ris", args.ris)):
@@ -1945,11 +1981,14 @@ def main():
                   + (f"; built {len(missing)} from the looked-up details, as doi.org had none: "
                      f"{', '.join(missing)}" if missing else "."))
 
-    verb = "renamed" if args.apply else "to rename"
+    done = {"rename": "renamed", "move": "moved", "copy": "copied"}[mode]
+    verb = done if args.apply else f"to {mode}"
     print(f"\n{renamed} {verb}, {failed} skipped, {len(pdfs)} total"
           + (f" ({from_cache} from cache)." if from_cache else "."))
+    if args.apply and renamed and mode == "copy":
+        print("The originals are unchanged.")
     if not args.apply and renamed:
-        print("Dry run only. Re-run with --apply to rename.")
+        print(f"Dry run only. Re-run with --apply to {mode}.")
 
 
 if __name__ == "__main__":

@@ -50,14 +50,19 @@ chapter's own record if Crossref has one, and a name like `Draine2010_Ch21.pdf`.
 - **Naming patterns**, e.g. `{author}{year}` → `Fermi1926`, `{authors}_{year}_{title}` →
   `LeCunEtAl_2015_DeepLearning`. Placeholders: `{author}`, `{authors}`, `{year}`, `{title}`, `{journal}`,
   `{part}`.
-- **Undo** for renames.
+- **Rename in place, move or copy**: next to the Rename button, choose whether the PDFs are renamed where
+  they are, moved to another folder and renamed there, or copied there under their new names (the
+  originals stay as they are). Moving or copying keeps subfolders and also takes the files that already
+  have the right name. On the command line: `--move-to DIR` or `--copy-to DIR`.
+- **Undo** for renames, moves and copies (copies go to the Recycle Bin / Trash).
 - **Duplicates**: finds copies of the same paper (same DOI or identical file) and moves the extras to the
   Recycle Bin / Trash. The copy with annotations is suggested for keeping.
 - **Citation export** to BibTeX or RIS, with keywords and abstracts. Keys match the file names and the
   PDFs are linked, so Zotero and JabRef can attach them on import. Books and papers without a DOI get an
   entry built from the looked-up details.
 - **Write title, authors, DOI and tags into the PDFs** (optional).
-- **Subfolders** (optional). Files are renamed where they are; nothing is moved.
+- **Subfolders** (optional). Files are renamed where they are, or, when moved or copied, keep their subfolder
+  in the new folder.
 - **Watch a folder**, e.g. `~/Downloads`: new PDFs are identified, renamed and moved to an output folder
   such as `~/Documents/BooksAndPapers` while the window is open (**Watch folder…**, optionally started
   with the app). Each PDF is looked at only once. Before a PDF is moved, it's compared with what's already
@@ -105,6 +110,8 @@ python rename_papers.py ~/papers                       # preview
 python rename_papers.py ~/papers --apply               # rename
 python rename_papers.py ~/papers -r --pattern "{author}_{year}_{title}"
 python rename_papers.py ~/papers --apply --write-metadata --bib library.bib
+python rename_papers.py ~/papers --apply --move-to ~/library     # move there and rename
+python rename_papers.py ~/papers --apply --copy-to ~/library     # copy there; originals unchanged
 python rename_papers.py ~/papers --deep-ocr --email you@example.com
 ```
 

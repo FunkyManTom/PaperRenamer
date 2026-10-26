@@ -9,6 +9,7 @@ Keep this file next to rename_papers.py.
 
 import html
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -113,6 +114,12 @@ FILTERS = [  # (key, label, which rows it shows)
     ("dups", "Duplicates", lambda r: r.dup is not None or bool(r.dup_of)),
 ]
 TRASH = "Recycle Bin" if sys.platform == "win32" else "Trash"
+# What "Rename" does with the files: key -> (menu label, button verb, status label of the done rows)
+RENAME_MODES = {
+    "rename": ("Rename in place", "Rename", "Renamed"),
+    "move": ("Move to folder and rename", "Move && rename", "Moved"),
+    "copy": ("Copy to folder and rename", "Copy && rename", "Copied"),
+}
 PATTERN_PRESETS = [
     "{author}{year}", "{author}_{year}", "{authors}{year}", "{author}{year}_{title}",
     "{author}_{year}_{title}", "{year}_{author}", "{author}_{year}_{journal}",
@@ -310,6 +317,7 @@ def app_icon(color):
 
 
 DUPLICATE_ROLE = Qt.ItemDataRole.UserRole + 1
+LABEL_ROLE = Qt.ItemDataRole.UserRole + 2  # the status pill's text, if not the status's usual one
 
 
 class StatusDelegate(QStyledItemDelegate):
@@ -329,7 +337,7 @@ class StatusDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setFont(font)
         x = option.rect.x() + 8
-        x += self.pill(painter, option.rect, x, font, STATUSES[key][0], key) + 6
+        x += self.pill(painter, option.rect, x, font, index.data(LABEL_ROLE) or STATUSES[key][0], key) + 6
         if index.data(DUPLICATE_ROLE):
             self.pill(painter, option.rect, x, font, DUPLICATE_PILL[0], "duplicate")
         painter.restore()
@@ -462,13 +470,14 @@ class Row:
         self.dup = None  # index of its duplicate group, if any
         self.dup_of = ""  # a file elsewhere it duplicates (found by the folder watcher)
         self.order = 0  # position in the folder listing
+        self.done_as = "rename"  # once done: renamed in place, moved or copied (RENAME_MODES)
         # Title/text/file name searches are fuzzy matches: flag them for a second look.
         self.base_state = ("check" if plan.detail.startswith(("title search", "text search", "file name search"))
                            else "rename")
         if plan.status == "skip":
             self.state, self.new_name, self.checked = "skip", "", False
-        elif plan.status == "ok":
-            self.state, self.new_name, self.checked = "ok", plan.pdf.name, False
+        elif plan.status == "ok":  # (ticked for when the files are moved or copied, see actionable())
+            self.state, self.new_name, self.checked = "ok", plan.pdf.name, True
         else:
             self.state, self.new_name, self.checked = self.base_state, plan.target.name, True
 
@@ -1201,8 +1210,8 @@ class MainWindow(QMainWindow):
         row3.setSpacing(18)
         self.subfolder_box = QCheckBox("Include subfolders")
         self.subfolder_box.setChecked(self.settings.value("subfolders", False, type=bool))
-        self.subfolder_box.setToolTip("Also scan PDFs in folders inside this one. "
-                                      "Files are renamed where they are; nothing is moved.")
+        self.subfolder_box.setToolTip("Also scan PDFs in folders inside this one. Files are renamed where they "
+                                      "are,\nor, if you move or copy them, keep their subfolders in the new folder.")
         self.subfolder_box.toggled.connect(self.subfolders_toggled)
         self.ocr_box = QCheckBox("Read scanned PDFs with OCR")
         self.ocr_box.setChecked(self.settings.value("ocr", True, type=bool))
@@ -1327,17 +1336,32 @@ class MainWindow(QMainWindow):
         self.export_btn.setMenu(export_menu)
         self.undo_btn = QPushButton("Undo", enabled=False)
         self.undo_btn.clicked.connect(self.undo)
+        self.mode_box = QComboBox()
+        for key, (label, _, _) in RENAME_MODES.items():
+            self.mode_box.addItem(label, key)
+        self.mode_box.setToolTip("Rename the PDFs where they are, or put them into another folder under their "
+                                 "new names:\nmoving takes them out of this folder, copying leaves the "
+                                 "originals here unchanged.")
+        mode = self.settings.value("rename_mode", "rename")
+        self.mode_box.setCurrentIndex(max(0, self.mode_box.findData(mode)))
+        self.mode_box.currentIndexChanged.connect(self.mode_changed)
+        self.dest = self.settings.value("rename_dest", "")
+        self.dest_btn = QPushButton(objectName="link")
+        self.dest_btn.clicked.connect(self.choose_dest)
         self.apply_btn = QPushButton("Rename files", objectName="primary", enabled=False)
         self.apply_btn.clicked.connect(self.apply_renames)
         foot.addWidget(self.hint)
         foot.addStretch(1)
         foot.addWidget(self.export_btn)
         foot.addWidget(self.undo_btn)
+        foot.addWidget(self.mode_box)
+        foot.addWidget(self.dest_btn)
         foot.addWidget(self.apply_btn)
         outer.addLayout(foot)
 
         self.update_cache_button()
         self.show_theme_choice()
+        self.show_dest()
         try:  # follow the computer's light/dark switch while "System" is chosen (Qt 6.5+)
             QApplication.instance().styleHints().colorSchemeChanged.connect(
                 lambda _scheme: self.settings.value("theme", "system") == "system" and self.set_theme("system"))
@@ -1576,7 +1600,7 @@ class MainWindow(QMainWindow):
         t = self.table
         t.blockSignals(True)
         chk = QTableWidgetItem()
-        if r.state in ACTIONABLE:
+        if self.actionable(r):
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             chk.setCheckState(Qt.CheckState.Checked if r.checked else Qt.CheckState.Unchecked)
         else:
@@ -1586,6 +1610,8 @@ class MainWindow(QMainWindow):
         status = QTableWidgetItem()
         status.setData(Qt.ItemDataRole.UserRole, r.state)
         status.setData(DUPLICATE_ROLE, r.dup is not None or bool(r.dup_of))
+        if r.state == "renamed":
+            status.setData(LABEL_ROLE, RENAME_MODES[r.done_as][2])
         if r.dup_of:
             status.setToolTip(f"Same paper as {r.dup_of}")
         status.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -1690,8 +1716,9 @@ class MainWindow(QMainWindow):
             b = self.filter_btns[key]
             b.setText(f"{label}  {n}")
             b.setVisible(key == "all" or n > 0 or b.isChecked())
-        todo = sum(r.checked and r.state in ACTIONABLE for r in self.rows)
-        self.apply_btn.setText(f"Rename {todo} file{'s' if todo != 1 else ''}" if todo else "Rename files")
+        todo = sum(r.checked and self.actionable(r) for r in self.rows)
+        verb = RENAME_MODES[self.rename_mode][1]
+        self.apply_btn.setText(f"{verb} {todo} file{'s' if todo != 1 else ''}" if todo else f"{verb} files")
         self.apply_btn.setEnabled(todo > 0 and not self.busy() and self.pattern_ok)
         self.export_btn.setEnabled(any(r.plan.meta for r in self.rows) and not self.busy())
 
@@ -1709,7 +1736,7 @@ class MainWindow(QMainWindow):
                 continue
             stem = rp.make_name(r.plan.meta, self.pattern)
             if rp.already_named(r.path, stem):
-                r.state, r.new_name, r.checked = "ok", r.path.name, False
+                r.state, r.new_name, r.checked = "ok", r.path.name, True
                 taken.add(rp.path_key(r.path))
             else:
                 target = rp.unique_target(r.path.parent, stem, taken)
@@ -1723,14 +1750,64 @@ class MainWindow(QMainWindow):
 
     # ----- renaming
 
+    @property
+    def rename_mode(self):
+        return self.mode_box.currentData()
+
+    def actionable(self, r):
+        """Rows the Rename button acts on: those to rename, and when moving or copying, those
+        that already have the right name too."""
+        return r.state in ACTIONABLE or r.state == "ok" and self.rename_mode != "rename"
+
+    def mode_changed(self, _index):
+        self.settings.setValue("rename_mode", self.rename_mode)
+        self.show_dest()
+        for i in range(len(self.rows)):  # "Already named" rows get a tick box when moving or copying
+            self.update_row(i)
+        self.refresh_counts()
+
+    def show_dest(self):
+        self.dest_btn.setVisible(self.rename_mode != "rename")
+        self.dest_btn.setText(f"to {Path(self.dest).name or self.dest}…" if self.dest else "Choose folder…")
+        self.dest_btn.setToolTip((f"{self.dest}\n" if self.dest else "")
+                                 + "The folder the renamed PDFs go to; subfolders are kept. Click to change it.")
+
+    def choose_dest(self):
+        """Ask for the folder moved or copied files go to; returns whether one was chosen."""
+        start = self.dest or self.folder or str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, "Choose where the renamed PDFs go", start)
+        if folder:
+            self.dest = str(Path(folder))
+            self.settings.setValue("rename_dest", self.dest)
+            self.show_dest()
+        return bool(folder)
+
+    def target_folder(self, r, mode):
+        """Where a file ends up: its own folder, or the same subfolder of the chosen one."""
+        if mode == "rename":
+            return r.path.parent
+        try:
+            return Path(self.dest) / r.path.parent.relative_to(self.folder)
+        except ValueError:
+            return Path(self.dest)
+
     def apply_renames(self):
-        jobs = [r for r in self.rows if r.checked and r.state in ACTIONABLE]
+        mode = self.rename_mode
+        if mode != "rename":
+            if not self.dest and not self.choose_dest():
+                return
+            if rp.path_key(Path(self.dest).resolve()) == rp.path_key(Path(self.folder).resolve()):
+                self.show_banner("The PDFs are already in that folder. Choose another one to "
+                                 f"{mode} them to, or rename them in place.", "warn")
+                return
+        jobs = [r for r in self.rows if r.checked and self.actionable(r)]
+        folders = {r: self.target_folder(r, mode) for r in jobs}
         taken = set()
-        for folder in {r.path.parent for r in jobs}:
+        for folder in set(folders.values()):
             try:
                 taken |= {rp.path_key(p) for p in folder.iterdir()}
             except OSError:
-                pass  # the folder is gone; renaming its files will fail and say so
+                pass  # the folder is gone (renaming its files will fail and say so) or not made yet
         write_meta = self.meta_box.isChecked() and bool(rp.pymupdf)
         self.settings.setValue("write_meta", self.meta_box.isChecked())
         done = failed = meta_written = 0
@@ -1739,21 +1816,30 @@ class MainWindow(QMainWindow):
         for i, r in enumerate(self.rows):
             if r not in jobs:
                 continue
-            src, target = r.path, r.path.parent / r.new_name
-            if rp.path_key(target) != rp.path_key(src) and rp.path_key(target) in taken:
-                target = rp.unique_target(src.parent, Path(r.new_name).stem, taken)
+            src, folder = r.path, folders[r]
+            target = folder / r.new_name
+            # A copy never takes the original's place, even if it keeps its name.
+            if (mode == "copy" or rp.path_key(target) != rp.path_key(src)) and rp.path_key(target) in taken:
+                target = rp.unique_target(folder, Path(r.new_name).stem, taken)
             try:
-                src.rename(target)
+                if mode == "rename":
+                    src.rename(target)
+                else:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    # (shutil.move also works across drives, by copying and deleting the original)
+                    (shutil.copy2 if mode == "copy" else shutil.move)(str(src), str(target))
             except OSError as e:
-                r.detail = (f"Couldn't rename: {e.strerror or e}. "
+                r.detail = (f"Couldn't {mode}: {e.strerror or e}. "
                             "Is the file open in another program?")
                 r.state, r.checked = "error", False
                 failed += 1
             else:
-                taken.discard(rp.path_key(src))
+                if mode != "copy":
+                    taken.discard(rp.path_key(src))
                 taken.add(rp.path_key(target))
-                batch.append((r, src, r.state, r.new_name))
-                r.path, r.new_name, r.state, r.checked = target, target.name, "renamed", False
+                batch.append((r, src, r.state, r.new_name, mode, r.hash))
+                # The row follows the renamed file; a copy's original stays as it was.
+                r.path, r.new_name, r.state, r.checked, r.done_as = target, target.name, "renamed", False, mode
                 done += 1
                 if write_meta and r.plan.meta:
                     try:
@@ -1770,34 +1856,50 @@ class MainWindow(QMainWindow):
             self.undo_stack.append(batch)
         self.undo_btn.setEnabled(bool(self.undo_stack))
         self.refresh_counts()
-        msg = f"Renamed {done} file{'s' if done != 1 else ''}."
+        files = f"{done} file{'s' if done != 1 else ''}"
+        msg = {"rename": f"Renamed {files}.",
+               "move": f"Moved {files} to {self.dest} and renamed {'them' if done != 1 else 'it'}.",
+               "copy": f"Copied {files} to {self.dest} under the new names; the originals are unchanged."}[mode]
         if meta_written:
             msg += f" Saved title, authors, DOI and tags in {meta_written} of them."
         if failed:
-            msg += f" {failed} couldn't be renamed (see the Not found tab)."
+            msg += f" {failed} couldn't be {RENAME_MODES[mode][2].lower()} (see the Not found tab)."
         if meta_failed:
             msg += f" Couldn't write details into: {', '.join(meta_failed[:3])}" + ("…" if len(meta_failed) > 3 else "")
-        self.show_banner(msg + (" Click Undo to put the old names back." if done else ""),
-                         "good" if not (failed or meta_failed) else "warn")
+        undo_hint = {"rename": " Click Undo to put the old names back.", "move": " Click Undo to move them back.",
+                     "copy": f" Click Undo to move the copies to the {TRASH}."}[mode]
+        self.show_banner(msg + (undo_hint if done else ""), "good" if not (failed or meta_failed) else "warn")
 
     def undo(self):
         if not self.undo_stack:
             return
         batch = self.undo_stack.pop()
         restored = 0
-        for r, src, state, new_name in reversed(batch):
-            if src.exists() or r not in self.rows:
-                continue  # the old name was taken in the meantime; leave it be
-            try:
-                r.path.rename(src)
-            except OSError:
+        for r, src, state, new_name, mode, digest in reversed(batch):
+            if r not in self.rows:
                 continue
-            r.path, r.state, r.new_name, r.checked = src, state, new_name, True
+            if mode == "copy":
+                if r.path.exists() and not QFile.moveToTrash(str(r.path)):
+                    continue  # the copy is open in another program; keep it
+            elif src.exists():
+                continue  # the old name was taken in the meantime; leave it be
+            else:
+                try:
+                    shutil.move(str(r.path), str(src))
+                except OSError:
+                    continue
+            r.path, r.state, r.new_name, r.checked, r.hash = src, state, new_name, True, digest
             restored += 1
             self.update_row(self.rows.index(r))
         self.undo_btn.setEnabled(bool(self.undo_stack))
         self.refresh_counts()
-        self.show_banner(f"Restored the original names of {restored} file{'s' if restored != 1 else ''}.", "good")
+        files = f"{restored} file{'s' if restored != 1 else ''}"
+        mode = batch[0][4]
+        self.show_banner({"rename": f"Restored the original names of {files}.",
+                          "move": f"Moved {files} back to {'their' if restored != 1 else 'its'} original "
+                                  "name and folder.",
+                          "copy": f"Moved {restored} cop{'ies' if restored != 1 else 'y'} to the {TRASH}; "
+                                  "the originals were never changed."}[mode], "good")
 
     # ----- citations
 
@@ -1814,9 +1916,9 @@ class MainWindow(QMainWindow):
             if not r.plan.meta:
                 continue
             # The citation key matches the file name (the planned one if it hasn't been renamed yet).
-            key = Path(r.new_name).stem if r.state in ACTIONABLE and r.checked else r.path.stem
+            key = Path(r.new_name).stem if self.actionable(r) and r.checked else r.path.stem
             entries.append((r.plan.meta, key, r.path.resolve()))
-        self.pending_renames = any(r.checked and r.state in ACTIONABLE for r in self.rows)
+        self.pending_renames = any(r.checked and self.actionable(r) for r in self.rows)
         self.progress.setRange(0, len(entries))
         self.progress.setValue(0)
         self.show_progress(True)
